@@ -208,6 +208,13 @@ impl Peerset {
 	}
 
 	fn on_remove_reserved_peer(&mut self, peer_id: PeerId) {
+		let reputation = match self.data.peer(&peer_id) {
+			peersstate::Peer::Connected(peer) => peer.reputation(),
+			peersstate::Peer::NotConnected(peer) => peer.reputation(),
+			peersstate::Peer::Unknown(_) => 0,
+		};
+		trace!(target: "peerset", "Removing reserved peer {:?} with reputation {}", &peer_id, reputation);
+
 		let mut reserved = self.data.get_priority_group(RESERVED_NODES).unwrap_or_default();
 		reserved.remove(&peer_id);
 		self.data.set_priority_group(RESERVED_NODES, reserved);
@@ -266,6 +273,7 @@ impl Peerset {
 			peersstate::Peer::Connected(mut peer) => {
 				peer.add_reputation(score_diff);
 				if peer.reputation() < BANNED_THRESHOLD {
+					trace!(target: "peerset", "Disconnecting from {:?} because reputation {} is below {}", &peer_id, peer.reputation(), BANNED_THRESHOLD);
 					peer.disconnect();
 					self.message_queue.push_back(Message::Drop(peer_id));
 				}
@@ -406,7 +414,7 @@ impl Peerset {
 				entry.disconnect();
 			}
 			peersstate::Peer::NotConnected(_) | peersstate::Peer::Unknown(_) =>
-				error!(target: "peerset", "Received dropped() for non-connected node"),
+				error!(target: "peerset", "Received dropped() for non-connected node {}", peer_id),
 		}
 
 		self.alloc_slots();
