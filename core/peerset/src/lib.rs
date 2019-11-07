@@ -520,6 +520,7 @@ mod tests {
 	use futures::prelude::*;
 	use super::{PeersetConfig, Peerset, Message, IncomingIndex, BANNED_THRESHOLD};
 	use std::{pin::Pin, task::Poll, thread, time::Duration};
+	use super::peersstate;
 
 	fn assert_messages(mut peerset: Peerset, messages: Vec<Message>) -> Peerset {
 		for expected_message in messages {
@@ -650,6 +651,55 @@ mod tests {
 			while let Poll::Ready(msg) = Stream::poll_next(Pin::new(&mut peerset), cx) {
 				assert_eq!(msg.unwrap(), Message::Accept(IncomingIndex(2)));
 			}
+
+			Poll::Ready(())
+		});
+
+		futures::executor::block_on(fut);
+	}
+
+	#[test]
+	fn test_peerset_drop_bad_reputation() {
+		let (mut peerset, handle) = Peerset::from_config(PeersetConfig {
+			in_peers: 25,
+			out_peers: 25,
+			bootnodes: vec![],
+			reserved_only: false,
+			reserved_nodes: vec![],
+		});
+
+		// Create a new peer to add to peerset
+		let peer_id = PeerId::random();
+
+		let fut = futures::future::poll_fn(|cx| {
+			// We need one polling for the message to be processed.
+			assert_eq!(Stream::poll_next(Pin::new(&mut peerset), cx), Poll::Pending);
+
+			// The peer connecting should be accepted
+			peerset.incoming(peer_id.clone(), IncomingIndex(1));
+			if let Poll::Ready(msg) = Stream::poll_next(Pin::new(&mut peerset), cx) {
+				assert_eq!(msg.unwrap(), Message::Accept(IncomingIndex(1)));
+			} else {
+				panic!()
+			}
+			Poll::Ready(())
+		});
+		futures::executor::block_on(fut);
+
+		// Damage the peer's reputation
+		handle.report_peer(peer_id.clone(), i32::min_value());
+
+		let fut = futures::future::poll_fn( |cx| {
+			// Have the peerset execute on the reported peer - this should cause a disconnect
+			let _ = Stream::poll_next(Pin::new(&mut peerset), cx);
+
+			let not_connected = match peerset.data.peer(&peer_id) {
+				peersstate::Peer::Connected(_) => false,
+				peersstate::Peer::NotConnected(_) => true,
+				peersstate::Peer::Unknown(_) => false, // unexpected state - so fail
+			};
+
+			assert!(not_connected);
 
 			Poll::Ready(())
 		});
